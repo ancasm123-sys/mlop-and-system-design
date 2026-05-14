@@ -23,6 +23,8 @@ wheels/
 share/python-wheels/
 *.egg-info/
 .installed.cfg
+.vscode/
+mlop-and-system-design/
 *.egg
 MANIFEST
 
