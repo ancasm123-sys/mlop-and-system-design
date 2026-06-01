@@ -36,7 +36,7 @@ jobs:
 
       - name: Format code with black
         run: |
-          black .
+          black session_4/
 
       - name: Commit and push changes
         run: |
