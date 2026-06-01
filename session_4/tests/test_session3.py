@@ -1,77 +1,73 @@
-import importlib.util
-import sys
-import os
-import unittest.mock
 import pandas as pd
-
-# Mock mlflow before loading exercise_support (it imports mlflow at module level)
-for _mod in ["mlflow", "mlflow.models"]:
-    sys.modules.setdefault(_mod, unittest.mock.MagicMock())
-
-# Load ClassSuportTransformer from "Session 3/" (space in folder name requires importlib)
-_session3_file = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "..", "Session 3", "exercise_support.py")
-)
-_spec = importlib.util.spec_from_file_location("exercise_support", _session3_file)
-_module = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(_module)
-ClassSuportTransformer = _module.ClassSuportTransformer
+from src.transform import Transformer
+from src.train import train_model
+from src.store import store_model
+import os
+import glob
 
 
-def test_drop_columns_removes_identifiers():
-    transformer = ClassSuportTransformer()
-    df = pd.DataFrame(
+def create_churn_sample():
+    """Churn dataset sample (same dataset used in session 3)."""
+    return pd.DataFrame(
         {
-            "RowNumber": [1, 2],
-            "CustomerId": [1001, 1002],
-            "Surname": ["Smith", "Jones"],
-            "CreditScore": [700, 650],
+            "RowNumber": [1, 2, 3, 4, 5, 6],
+            "CustomerId": [1001, 1002, 1003, 1004, 1005, 1006],
+            "Surname": ["Smith", "Jones", "Brown", "Lee", "Chen", "Wang"],
+            "CreditScore": [700, 580, 650, 720, 610, 680],
+            "Geography": ["France", "Germany", "Spain", "France", "Germany", "Spain"],
+            "Gender": ["Male", "Female", "Male", "Female", "Male", "Female"],
+            "Age": [35.0, 52.0, 28.0, 45.0, 33.0, 60.0],
+            "Tenure": [5, 2, 7, 3, 8, 1],
+            "Balance": [100000.0, 80000.0, 0.0, 50000.0, 120000.0, 0.0],
+            "NumOfProducts": [2, 1, 2, 1, 2, 1],
+            "HasCrCard": [1.0, 1.0, 0.0, 1.0, 0.0, 1.0],
+            "IsActiveMember": [1.0, 0.0, 1.0, 0.0, 1.0, 0.0],
+            "EstimatedSalary": [60000.0, 70000.0, 45000.0, 90000.0, 55000.0, 80000.0],
+            "Exited": [0, 1, 0, 1, 0, 1],
         }
     )
-    result = transformer._drop_columns(df)
-    assert "RowNumber" not in result.columns
-    assert "CustomerId" not in result.columns
-    assert "Surname" not in result.columns
-    assert "CreditScore" in result.columns
 
 
-def test_map_binary_female_is_one():
-    # Session 3 maps Female -> 1, Male -> 0 (opposite of session 4)
-    transformer = ClassSuportTransformer()
-    df = pd.DataFrame({"Gender": ["Female", "Male", "Female"]})
-    result = transformer._map_binary_variables(df)
-    assert result["Gender"].iloc[0] == 1
-    assert result["Gender"].iloc[1] == 0
+def test_full_pipeline_transform_and_train():
+    df = create_churn_sample()
+    transformed = Transformer().transform(df)
+    model = train_model(df=transformed, target_column="Exited")
+    assert model is not None
 
 
-def test_map_binary_male_is_zero():
-    transformer = ClassSuportTransformer()
-    df = pd.DataFrame({"Gender": ["Male"]})
-    result = transformer._map_binary_variables(df)
-    assert result["Gender"].iloc[0] == 0
+def test_pipeline_predict_proba():
+    df = create_churn_sample()
+    transformed = Transformer().transform(df)
+    model = train_model(df=transformed, target_column="Exited")
+    X = transformed.drop(columns=["Exited"])
+    proba = model.predict_proba(X)
+    assert proba.shape[1] == 2
+    assert all(round(p[0] + p[1], 5) == 1.0 for p in proba)
 
 
-def test_balance_dataset_equal_classes():
-    transformer = ClassSuportTransformer()
-    df = pd.DataFrame(
-        {
-            "Age": [25, 30, 35, 40, 45],
-            "Exited": [0, 0, 0, 1, 1],
-        }
-    )
-    balanced = transformer.balance_dataset(df)
-    counts = balanced["Exited"].value_counts()
-    assert counts[0] == counts[1]
+def test_pipeline_predictions_are_binary():
+    df = create_churn_sample()
+    transformed = Transformer().transform(df)
+    model = train_model(df=transformed, target_column="Exited")
+    X = transformed.drop(columns=["Exited"])
+    predictions = model.predict(X)
+    assert all(p in [0, 1] for p in predictions)
 
 
-def test_balance_dataset_already_balanced():
-    transformer = ClassSuportTransformer()
-    df = pd.DataFrame(
-        {
-            "Age": [25, 30, 35, 40],
-            "Exited": [0, 0, 1, 1],
-        }
-    )
-    balanced = transformer.balance_dataset(df)
-    counts = balanced["Exited"].value_counts()
-    assert counts[0] == counts[1]
+def test_store_model_creates_file(tmp_path, monkeypatch):
+    monkeypatch.setenv("MODELS_FOLDER", str(tmp_path))
+
+    import src.store as store_module
+    original = store_module.MODELS_FOLDER
+
+    store_module.MODELS_FOLDER = str(tmp_path)
+
+    df = create_churn_sample()
+    transformed = Transformer().transform(df)
+    model = train_model(df=transformed, target_column="Exited")
+    store_model(model=model, model_name="class_model-Andre")
+
+    saved_files = list(tmp_path.glob("*.joblib"))
+    assert len(saved_files) == 1
+
+    store_module.MODELS_FOLDER = original
